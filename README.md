@@ -1,64 +1,135 @@
-# Welcome to your Lovable project
+# CleanFlow: AI-Driven Waste Optimization for Zero-Waste Events
 
-## Project info
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Built with AI](https://img.shields.io/badge/Built%20with-AI-blueviolet)]()
+[![Hackathon Project](https://img.shields.io/badge/Category-Social%20Good-green)]()
 
-**URL**: https://lovable.dev/projects/059dce98-20a1-4c3c-b7b3-b85761a3b69d
+> **Empowering cities and event organizers to plan cleaner, smarter, and more sustainable events through AI simulation and optimization.**
 
-## How can I edit this code?
+---
 
-There are several ways of editing your application.
+## 🌍 Overview
 
-**Use Lovable**
+Every year, major cities pledge to reduce waste — yet even flagship events like the Olympics struggle to meet their **zero-waste goals** due to inefficient bin placement, unpredictable crowd movement, and limited visibility into waste behavior.
 
-Simply visit the [Lovable Project](https://lovable.dev/projects/059dce98-20a1-4c3c-b7b3-b85761a3b69d) and start prompting.
+**CleanFlow** reimagines this challenge with a data-driven approach. Using **AI reasoning and agent-based simulation**, CleanFlow predicts where waste is most likely to occur and recommends **optimal bin placement** that minimizes litter and maximizes recycling efficiency.
 
-Changes made via Lovable will be committed automatically to this repo.
+Inspired by the upcoming **Los Angeles 2028 Olympics**, this project envisions how AI can help LA become the **first zero-waste Olympic city**.
 
-**Use your preferred IDE**
+---
 
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
+## 🎥 Storyboard Narrative for Higgsfield (if given credit for sketch to video)
 
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
+| Panel | Scene | Description |
+|-------|--------|-------------|
+| 1 | *The Promise* | The Mayor of LA promises a zero-waste Olympics. |
+| 2 | *The Reality* | Overflowing bins and missed recycling targets. |
+| 3 | *Rewind* | Time rewinds to the event planning stage. |
+| 4 | *The Discovery* | The Mayor’s team finds the CleanFlow AI app. |
+| 5 | *Optimization* | AI simulates crowd flow and suggests optimal bin placements. |
+| 6 | *The Transformation* | Streets are clean; recycling hits 100%. |
+| 7 | *The Triumph* | LA wins the **Gold Medal in Waste Management** for the Olympics. 🥇 |
 
-Follow these steps:
+*(Storyboard visual available in the `/assets` folder.)*
 
-```sh
-# Step 1: Clone the repository using the project's Git URL.
-git clone <YOUR_GIT_URL>
+---
 
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
+## 🧠 Core Features
 
-# Step 3: Install the necessary dependencies.
-npm i
+### 🔹 Map & Heatmap Upload
+- Upload a venue layout and optional foot-traffic heatmap.
+- If no data is provided, the AI estimates crowd density using total attendees and vendor locations. (In Development)
 
-# Step 4: Start the development server with auto-reloading and an instant preview.
-npm run dev
-```
+### 🔹 Interactive Placement Interface
+- Drag-and-drop icons (🗑️ bins, 🏪 vendors, 🚪 entries) directly onto the map.
 
-**Edit a file directly in GitHub**
+### 🔹 Smart Variable Controls
+Configure real-world parameters:
+- Estimated number of people per hour
+- Capacity per bin
+- Target utilization rate per bin
+- Cost per bin  
+- Vendor trash output per hour
 
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
+### 🔹 AI Analysis Output
+After clicking **Submit**, the AI:
+- Calculates *optimal bin placement*
+- Reports *% trash captured* and *# of bins reduced*
+- Explains reasoning with data 
 
-**Use GitHub Codespaces**
+---
 
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
+## ⚙️ Technical Architecture
 
-## What technologies are used for this project?
+| Component | Description |
+|------------|-------------|
+| **Frontend** | Lovable-generated UI (React + Tailwind) with map uploads and overlays |
+| **Backend** | Python (Mesa / NumPy) for agent-based waste simulation |
+| **Optimization Logic** | Multi-objective heuristic minimizing total bins while maximizing trash capture probability |
+| **AI Layer** | LLM for reasoning, visualization narration, and report generation |
 
-This project is built with:
+---
 
-- Vite
-- TypeScript
-- React
-- shadcn-ui
-- Tailwind CSS
+## 📊 Example Metrics
+
+| Metric | Baseline | With CleanFlow |
+|--------|-----------|----------------|
+| Waste captured | 65% | **95%** |
+| Number of bins | 20 | **16 (-20%)** |
+| Overflow incidents | 30/day | **0** |
+| Recycling rate | 63% | **100%** |
+| Cleanup cost | \$2.5 M | **\$2.0 M (-20%)** |
+
+---
+
+## 🧩 Data Sources
+
+| Data Type | Example Source |
+|------------|----------------|
+| Waste tonnage & bin data | [NYC Open Data](https://data.cityofnewyork.us), [LA Open Data](https://data.lacity.org) |
+| Foot-traffic estimates | Google Maps Popular Times, SafeGraph |
+| Behavioral coefficients | Keep Britain Tidy (2018), EPA Litter Prevention Study (2021) |
+| Venue layouts | OpenStreetMap stadiums, parks, and plazas |
+---
+
+## 💡 Impact
+
+- 🌱 **Environmental:** Less litter and landfill waste  
+- 🧹 **Operational:** Reduced cleanup time and labor  
+- 💰 **Economic:** Lower waste management costs  
+- 💬 **Social:** Improved attendee experience and public image  
+
+> “Cleaner cities start with smarter design.”
+
+---
+
+## 🏆 Hackathon Criteria Alignment
+
+| Category | Strength |
+|-----------|-----------|
+| **Technical Feasibility** | Functional prototype with interactive simulation and optimization. |
+| **Identification of Problem** | Tackles a visible sustainability issue faced by every major event. |
+| **Novelty of Solution** | First to combine LLM reasoning + ABM waste modeling to optimize bin placement for big events. |
+| **Venture Feasibility** | Scalable to campuses, festivals, conventions, fairs and city planning. |
+
+---
+
+## 🚀 Future Directions
+
+- Real-time feedback via IoT smart bins & Camera recordings
+- More nuanced model to provide deeper analysis and explanations
+- Expanded optimization for water refill stations, popup vendors, other sources (tailgate)
+- Pilot partnership with **LA 2028 Organizing Committee**
+
+---
+
+## 🧑‍💻 Team
+**Contributors**
+- 🧭 Technical Project Lead — *Pannawat Chauychoo*  
+- 🤖 Vibe Coding Savant  — *Nicholas Scolieri*  
+- 🎨 Product Analyst — *Daniel*  
+
+
 
 ## How can I deploy this project?
 
