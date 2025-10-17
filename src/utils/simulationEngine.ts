@@ -26,7 +26,7 @@ interface Node {
   id: string;
   x: number;
   y: number;
-  type: string;
+  type: "vendor" | "entry-exit" | "bin";
 }
 
 export class SimulationEngine {
@@ -131,7 +131,7 @@ export class SimulationEngine {
 
   private spawnAgents() {
     const entryNodes = this.nodes.filter(n => n.type === 'entry-exit');
-    const targetNodes = this.nodes.filter(n => n.type === 'entry-exit' || n.type === 'poi');
+    const targetNodes = this.nodes.filter(n => n.type === 'entry-exit' || n.type === 'bin');
     
     for (let i = 0; i < this.params.numAgents; i++) {
       // Random entry point
@@ -255,8 +255,8 @@ export class SimulationEngine {
         
         if (distToTarget < this.params.gridSize * 2) {
           // Reached target, assign new random target
-          const newTargets = this.nodes.filter(n => 
-            (n.type === 'entry-exit' || n.type === 'poi') && n.id !== agent.targetNodeId
+        const newTargets = this.nodes.filter(n => 
+            (n.type === 'entry-exit' || n.type === 'bin') && n.id !== agent.targetNodeId
           );
           if (newTargets.length > 0) {
             agent.targetNodeId = newTargets[Math.floor(Math.random() * newTargets.length)].id;
