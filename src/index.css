@@ -41,6 +41,8 @@ All colors MUST be HSL.
     --node-primary: 215 85% 55%;
     --node-street: 30 90% 60%;
     --node-walkway: 145 65% 50%;
+    --node-entry: 280 70% 50%;
+    --node-poi: 45 100% 55%;
     
     --tool-hover: 215 85% 95%;
     --canvas-bg: 210 15% 96%;
@@ -94,6 +96,8 @@ All colors MUST be HSL.
     --node-primary: 215 85% 60%;
     --node-street: 30 85% 55%;
     --node-walkway: 145 60% 45%;
+    --node-entry: 280 65% 55%;
+    --node-poi: 45 95% 60%;
     
     --tool-hover: 215 30% 20%;
     --canvas-bg: 215 25% 8%;

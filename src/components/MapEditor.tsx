@@ -1,19 +1,21 @@
 import { useState, useRef, useEffect } from "react";
-import { MapPin, Route, Footprints, Move, Trash2, Layers } from "lucide-react";
+import { MapPin, Route, Footprints, Move, Trash2, Layers, Undo, Redo, DoorOpen, Star } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import mapImage from "@/assets/coliseum_grid_overlay.png";
 import { toast } from "sonner";
 
-type ToolType = "select" | "node" | "street" | "walkway";
+type ToolType = "select" | "node" | "street" | "walkway" | "entry-exit" | "poi";
 
 interface Node {
   id: string;
   x: number;
   y: number;
-  type: "key-node" | "street" | "walkway";
+  type: "key-node" | "entry-exit" | "poi";
   label: string;
 }
 
@@ -22,6 +24,12 @@ interface Path {
   points: { x: number; y: number }[];
   type: "street" | "walkway";
   label: string;
+  capacity: number; // people per minute
+}
+
+interface MapState {
+  nodes: Node[];
+  paths: Path[];
 }
 
 export const MapEditor = () => {
@@ -29,13 +37,47 @@ export const MapEditor = () => {
   const [nodes, setNodes] = useState<Node[]>([]);
   const [paths, setPaths] = useState<Path[]>([]);
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
+  const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [draggingNode, setDraggingNode] = useState<string | null>(null);
   const [drawingPath, setDrawingPath] = useState<{ x: number; y: number }[]>([]);
   const [showNodes, setShowNodes] = useState(true);
   const [showStreets, setShowStreets] = useState(true);
   const [showWalkways, setShowWalkways] = useState(true);
+  const [showEntryExit, setShowEntryExit] = useState(true);
+  const [showPOI, setShowPOI] = useState(true);
+  
+  // History for undo/redo
+  const [history, setHistory] = useState<MapState[]>([{ nodes: [], paths: [] }]);
+  const [historyIndex, setHistoryIndex] = useState(0);
   
   const canvasRef = useRef<HTMLDivElement>(null);
+
+  const saveToHistory = (newNodes: Node[], newPaths: Path[]) => {
+    const newHistory = history.slice(0, historyIndex + 1);
+    newHistory.push({ nodes: newNodes, paths: newPaths });
+    setHistory(newHistory);
+    setHistoryIndex(newHistory.length - 1);
+  };
+
+  const undo = () => {
+    if (historyIndex > 0) {
+      const newIndex = historyIndex - 1;
+      setHistoryIndex(newIndex);
+      setNodes(history[newIndex].nodes);
+      setPaths(history[newIndex].paths);
+      toast.success("Undone");
+    }
+  };
+
+  const redo = () => {
+    if (historyIndex < history.length - 1) {
+      const newIndex = historyIndex + 1;
+      setHistoryIndex(newIndex);
+      setNodes(history[newIndex].nodes);
+      setPaths(history[newIndex].paths);
+      toast.success("Redone");
+    }
+  };
 
   const handleCanvasClick = (e: React.MouseEvent<HTMLDivElement>) => {
     if (!canvasRef.current) return;
@@ -52,8 +94,34 @@ export const MapEditor = () => {
         type: "key-node",
         label: `Node ${nodes.length + 1}`,
       };
-      setNodes([...nodes, newNode]);
+      const newNodes = [...nodes, newNode];
+      setNodes(newNodes);
+      saveToHistory(newNodes, paths);
       toast.success("Key node added");
+    } else if (tool === "entry-exit") {
+      const newNode: Node = {
+        id: `entry-${Date.now()}`,
+        x,
+        y,
+        type: "entry-exit",
+        label: `Entry/Exit ${nodes.filter(n => n.type === "entry-exit").length + 1}`,
+      };
+      const newNodes = [...nodes, newNode];
+      setNodes(newNodes);
+      saveToHistory(newNodes, paths);
+      toast.success("Entry/Exit point added");
+    } else if (tool === "poi") {
+      const newNode: Node = {
+        id: `poi-${Date.now()}`,
+        x,
+        y,
+        type: "poi",
+        label: `POI ${nodes.filter(n => n.type === "poi").length + 1}`,
+      };
+      const newNodes = [...nodes, newNode];
+      setNodes(newNodes);
+      saveToHistory(newNodes, paths);
+      toast.success("Point of interest added");
     } else if (tool === "street" || tool === "walkway") {
       setDrawingPath([...drawingPath, { x, y }]);
     }
@@ -66,8 +134,11 @@ export const MapEditor = () => {
         points: drawingPath,
         type: tool === "street" ? "street" : "walkway",
         label: tool === "street" ? `Street ${paths.filter(p => p.type === "street").length + 1}` : `Walkway ${paths.filter(p => p.type === "walkway").length + 1}`,
+        capacity: tool === "street" ? 100 : 50, // default capacity
       };
-      setPaths([...paths, newPath]);
+      const newPaths = [...paths, newPath];
+      setPaths(newPaths);
+      saveToHistory(nodes, newPaths);
       toast.success(`${tool === "street" ? "Street" : "Walkway"} created`);
     }
     setDrawingPath([]);
@@ -99,17 +170,32 @@ export const MapEditor = () => {
 
   const deleteSelected = () => {
     if (selectedNode) {
-      setNodes(nodes.filter(n => n.id !== selectedNode));
+      const newNodes = nodes.filter(n => n.id !== selectedNode);
+      setNodes(newNodes);
+      saveToHistory(newNodes, paths);
       setSelectedNode(null);
       toast.success("Node deleted");
     }
+    if (selectedPath) {
+      const newPaths = paths.filter(p => p.id !== selectedPath);
+      setPaths(newPaths);
+      saveToHistory(nodes, newPaths);
+      setSelectedPath(null);
+      toast.success("Path deleted");
+    }
+  };
+
+  const updatePathCapacity = (pathId: string, capacity: number) => {
+    const newPaths = paths.map(p => p.id === pathId ? { ...p, capacity } : p);
+    setPaths(newPaths);
+    saveToHistory(nodes, newPaths);
   };
 
   const getNodeColor = (type: Node["type"]) => {
     switch (type) {
       case "key-node": return "hsl(var(--node-primary))";
-      case "street": return "hsl(var(--node-street))";
-      case "walkway": return "hsl(var(--node-walkway))";
+      case "entry-exit": return "hsl(var(--node-entry))";
+      case "poi": return "hsl(var(--node-poi))";
     }
   };
 
@@ -119,30 +205,62 @@ export const MapEditor = () => {
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Delete" && selectedNode) {
+      if (e.key === "Delete" && (selectedNode || selectedPath)) {
         deleteSelected();
       } else if (e.key === "Escape") {
         setDrawingPath([]);
         setSelectedNode(null);
+        setSelectedPath(null);
       } else if (e.key === "Enter" && drawingPath.length > 0) {
         finishPath();
+      } else if (e.ctrlKey && e.key === "z" && !e.shiftKey) {
+        e.preventDefault();
+        undo();
+      } else if (e.ctrlKey && (e.key === "y" || (e.shiftKey && e.key === "z"))) {
+        e.preventDefault();
+        redo();
       }
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [selectedNode, drawingPath]);
+  }, [selectedNode, selectedPath, drawingPath, historyIndex, history]);
 
   return (
     <div className="flex h-screen bg-background">
       {/* Sidebar */}
-      <Card className="w-64 rounded-none border-r flex flex-col">
+      <Card className="w-64 rounded-none border-r flex flex-col overflow-y-auto">
         <div className="p-4 border-b">
           <h2 className="text-lg font-semibold text-foreground">Map Editor</h2>
           <p className="text-sm text-muted-foreground">Urban planning tools</p>
         </div>
 
         <div className="p-4 space-y-4 flex-1">
+          <div>
+            <div className="flex gap-1 mb-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={undo}
+                disabled={historyIndex === 0}
+                className="flex-1"
+              >
+                <Undo className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={redo}
+                disabled={historyIndex === history.length - 1}
+                className="flex-1"
+              >
+                <Redo className="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
+
+          <Separator />
+
           <div>
             <h3 className="text-sm font-medium mb-2 text-foreground">Tools</h3>
             <div className="space-y-1">
@@ -161,6 +279,22 @@ export const MapEditor = () => {
               >
                 <MapPin className="mr-2 h-4 w-4" />
                 Add Key Node
+              </Button>
+              <Button
+                variant={tool === "entry-exit" ? "default" : "ghost"}
+                className="w-full justify-start"
+                onClick={() => setTool("entry-exit")}
+              >
+                <DoorOpen className="mr-2 h-4 w-4" />
+                Entry/Exit Point
+              </Button>
+              <Button
+                variant={tool === "poi" ? "default" : "ghost"}
+                className="w-full justify-start"
+                onClick={() => setTool("poi")}
+              >
+                <Star className="mr-2 h-4 w-4" />
+                Point of Interest
               </Button>
               <Button
                 variant={tool === "street" ? "default" : "ghost"}
@@ -202,7 +336,25 @@ export const MapEditor = () => {
                   onChange={(e) => setShowNodes(e.target.checked)}
                   className="rounded"
                 />
-                <span className="text-sm">Key Nodes ({nodes.length})</span>
+                <span className="text-sm">Key Nodes ({nodes.filter(n => n.type === "key-node").length})</span>
+              </label>
+              <label className="flex items-center space-x-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={showEntryExit}
+                  onChange={(e) => setShowEntryExit(e.target.checked)}
+                  className="rounded"
+                />
+                <span className="text-sm">Entry/Exit ({nodes.filter(n => n.type === "entry-exit").length})</span>
+              </label>
+              <label className="flex items-center space-x-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={showPOI}
+                  onChange={(e) => setShowPOI(e.target.checked)}
+                  className="rounded"
+                />
+                <span className="text-sm">POIs ({nodes.filter(n => n.type === "poi").length})</span>
               </label>
               <label className="flex items-center space-x-2 cursor-pointer">
                 <input
@@ -243,6 +395,36 @@ export const MapEditor = () => {
             </>
           )}
 
+          {selectedPath && (
+            <>
+              <Separator />
+              <div>
+                <h3 className="text-sm font-medium mb-2 text-foreground">Selected Path</h3>
+                <div className="space-y-2">
+                  <div>
+                    <Label className="text-xs">Capacity (people/min)</Label>
+                    <Input
+                      type="number"
+                      min="1"
+                      value={paths.find(p => p.id === selectedPath)?.capacity || 50}
+                      onChange={(e) => updatePathCapacity(selectedPath, parseInt(e.target.value) || 50)}
+                      className="h-8"
+                    />
+                  </div>
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    className="w-full"
+                    onClick={deleteSelected}
+                  >
+                    <Trash2 className="mr-2 h-4 w-4" />
+                    Delete Path
+                  </Button>
+                </div>
+              </div>
+            </>
+          )}
+
           {drawingPath.length > 0 && (
             <>
               <Separator />
@@ -269,6 +451,8 @@ export const MapEditor = () => {
           <Badge variant="secondary" className="w-full justify-center">
             {tool === "select" && "Select Mode"}
             {tool === "node" && "Adding Nodes"}
+            {tool === "entry-exit" && "Adding Entry/Exit"}
+            {tool === "poi" && "Adding POI"}
             {tool === "street" && "Drawing Streets"}
             {tool === "walkway" && "Drawing Walkways"}
           </Badge>
@@ -299,16 +483,34 @@ export const MapEditor = () => {
               
               const pathString = path.points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ');
               return (
-                <path
-                  key={path.id}
-                  d={pathString}
-                  stroke={getPathColor(path.type)}
-                  strokeWidth="3"
-                  fill="none"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  opacity="0.8"
-                />
+                <g key={path.id}>
+                  <path
+                    d={pathString}
+                    stroke={getPathColor(path.type)}
+                    strokeWidth="3"
+                    fill="none"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    opacity="0.8"
+                  />
+                  <path
+                    d={pathString}
+                    stroke="transparent"
+                    strokeWidth="15"
+                    fill="none"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    style={{ cursor: tool === "select" ? "pointer" : "inherit", pointerEvents: "stroke" }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (tool === "select") {
+                        setSelectedPath(path.id);
+                        setSelectedNode(null);
+                      }
+                    }}
+                    className={selectedPath === path.id ? "stroke-primary/20" : ""}
+                  />
+                </g>
               );
             })}
 
@@ -328,7 +530,13 @@ export const MapEditor = () => {
           </svg>
 
           {/* Draw nodes */}
-          {showNodes && nodes.map((node) => (
+          {nodes.map((node) => {
+            if ((node.type === "key-node" && !showNodes) ||
+                (node.type === "entry-exit" && !showEntryExit) ||
+                (node.type === "poi" && !showPOI)) {
+              return null;
+            }
+            return (
             <div
               key={node.id}
               className="absolute -translate-x-1/2 -translate-y-1/2 pointer-events-auto cursor-move transition-transform hover:scale-110"
@@ -348,7 +556,8 @@ export const MapEditor = () => {
                 {node.label}
               </div>
             </div>
-          ))}
+          );
+          })}
 
           {/* Draw points for current path */}
           {drawingPath.map((point, i) => (
