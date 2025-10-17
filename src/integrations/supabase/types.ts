@@ -14,7 +14,45 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      projects: {
+        Row: {
+          created_at: string
+          description: string | null
+          grid_overlay_applied: boolean
+          grid_size: number | null
+          id: string
+          map_data: Json | null
+          name: string
+          original_image_url: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          description?: string | null
+          grid_overlay_applied?: boolean
+          grid_size?: number | null
+          id?: string
+          map_data?: Json | null
+          name: string
+          original_image_url: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          description?: string | null
+          grid_overlay_applied?: boolean
+          grid_size?: number | null
+          id?: string
+          map_data?: Json | null
+          name?: string
+          original_image_url?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
