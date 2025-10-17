@@ -12,6 +12,8 @@ import { toast } from "sonner";
 
 type ToolType = "select" | "vendor" | "walkway" | "entry-exit" | "bin";
 
+type Point = { x: number; y: number };
+
 interface Node {
   id: string;
   x: number;
@@ -51,6 +53,8 @@ interface RecommendedBin {
   walkwayDistance: number;
   capturePerHour: number;
   utilization: number;
+  position: { x: number; y: number };
+  source: "user" | "auto";
 }
 
 interface OptimizationReport {
@@ -78,6 +82,24 @@ interface ChatMessage {
   timestamp: number;
 }
 
+interface WalkwaySample {
+  pathId: string | null;
+  point: Point;
+  distanceAlong: number;
+  weight: number;
+  wasteUnits: number;
+}
+
+const BIN_CAPACITY_UNITS = 1;
+const OVERLOAD_THRESHOLD = 1;
+const UNDER_UTILIZATION_THRESHOLD = 0.8;
+const MIN_NEW_BIN_UTILIZATION = 0.5;
+const MAX_PARTNER_DISTANCE = 50;
+const WALKWAY_SAMPLE_SPACING = 20;
+const VENDOR_INFLUENCE_RADIUS = 200;
+const WEIGHT_DISTANCE_FACTOR = 120;
+const WASTE_PER_SALE_BIN_UNITS = 0.01;
+
 export const MapEditor = () => {
   const [tool, setTool] = useState<ToolType>("select");
   const [nodes, setNodes] = useState<Node[]>([]);
@@ -104,7 +126,7 @@ export const MapEditor = () => {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState("");
   const [isAssistantThinking, setIsAssistantThinking] = useState(false);
-  
+
   const canvasRef = useRef<HTMLDivElement>(null);
   const assistantTimerRef = useRef<number | null>(null);
   const pendingAssistantRef = useRef<{ question: string; report: OptimizationReport } | null>(null);
@@ -117,6 +139,16 @@ export const MapEditor = () => {
     if (!report) return new Map<string, RecommendedBin>();
     return new Map(report.recommendedBins.map((bin) => [bin.id, bin]));
   }, [report]);
+
+  const autoRecommendedBins = useMemo(
+    () =>
+      report
+        ? report.recommendedBins.filter(
+          (bin) => bin.source === "auto" && !nodes.some((node) => node.id === bin.id)
+        )
+        : [],
+    [report, nodes]
+  );
 
   useEffect(() => {
     if (!report) {
@@ -294,9 +326,9 @@ export const MapEditor = () => {
   const distance = (a: { x: number; y: number }, b: { x: number; y: number }) =>
     Math.hypot(a.x - b.x, a.y - b.y);
 
-  const computeAverageDistanceToVendors = (bin: Node, vendorNodes: Node[]) => {
+  const computeAverageDistanceToVendors = (point: Point, vendorNodes: Node[]) => {
     if (vendorNodes.length === 0) return 0;
-    const total = vendorNodes.reduce((sum, vendor) => sum + distance(bin, vendor), 0);
+    const total = vendorNodes.reduce((sum, vendor) => sum + distance(point, vendor), 0);
     return total / vendorNodes.length;
   };
 
@@ -332,7 +364,7 @@ export const MapEditor = () => {
     return Math.hypot(px - closestX, py - closestY);
   };
 
-  const computeClosestWalkwayDistance = (node: Node, pathList: Path[]) => {
+  const computeClosestWalkwayDistance = (point: Point, pathList: Path[]) => {
     if (pathList.length === 0) return Infinity;
     let minDistance = Infinity;
     pathList.forEach((path) => {
@@ -340,7 +372,7 @@ export const MapEditor = () => {
       for (let i = 0; i < path.points.length - 1; i++) {
         const start = path.points[i];
         const end = path.points[i + 1];
-        const dist = distancePointToSegment(node.x, node.y, start.x, start.y, end.x, end.y);
+        const dist = distancePointToSegment(point.x, point.y, start.x, start.y, end.x, end.y);
         if (dist < minDistance) {
           minDistance = dist;
         }
@@ -349,10 +381,10 @@ export const MapEditor = () => {
     return minDistance;
   };
 
-  const computeNearestEntryDistance = (node: Node, entryNodes: Node[]) => {
+  const computeNearestEntryDistance = (point: Point, entryNodes: Node[]) => {
     if (entryNodes.length === 0) return Infinity;
     return entryNodes.reduce((min, entry) => {
-      const dist = distance(node, entry);
+      const dist = distance(point, entry);
       return dist < min ? dist : min;
     }, Infinity);
   };
@@ -361,29 +393,24 @@ export const MapEditor = () => {
     const capturePercent = Math.round(result.captureRate * 100);
     const binCount = result.recommendedBins.length;
     const binsPhrase = binCount === 1 ? "bin" : "bins";
-    return `I've analyzed the current layout and recommend ${binCount} ${binsPhrase} (budget allows ${result.maxBinsAllowed}), capturing roughly ${capturePercent}% of vendor waste for a total cost of $${result.totalCost.toFixed(
-      2
-    )} while targeting ${Math.round(result.targetUtilization * 100)}% utilization. Happy to explain any detail further.`;
+    return `Optimized ${binCount} ${binsPhrase} (budget ${result.maxBinsAllowed}) to capture roughly ${capturePercent}% of hourly waste while averaging ${Math.round(result.averageUtilization * 100)}% utilization against the 80% relocation threshold. Let me know what you'd like to tweak next.`;
   };
 
   const handleGenerateReport = () => {
     setIsGeneratingReport(true);
     try {
       const vendors = nodes.filter((node) => node.type === "vendor");
-      const bins = nodes.filter((node) => node.type === "bin");
+      const existingBins = nodes.filter((node) => node.type === "bin");
       const entries = nodes.filter((node) => node.type === "entry-exit");
 
       const walkwayLength = computeWalkwayLength(paths);
       const totalVendorSalesPerHour = vendors.length * planningParams.vendorSalesPerHour;
-      const WASTE_PER_SALE = 0.08; // assumed waste production (kg or bags) per sale
-      const totalWastePerHour = totalVendorSalesPerHour * WASTE_PER_SALE;
+      const totalWasteUnits = totalVendorSalesPerHour * WASTE_PER_SALE_BIN_UNITS;
 
       const notes: string[] = [];
+
       if (vendors.length === 0) {
         notes.push("Add at least one vendor/source to estimate waste generation.");
-      }
-      if (bins.length === 0) {
-        notes.push("Place one or more bin placeholders on the map to evaluate coverage.");
       }
       if (entries.length === 0) {
         notes.push("Entry/exit points help contextualize pedestrian distribution.");
@@ -391,271 +418,448 @@ export const MapEditor = () => {
       if (paths.length === 0) {
         notes.push("Draw walkways to outline pedestrian flow for more realistic coverage.");
       }
+      if (existingBins.length === 0) {
+        notes.push("No existing bins were detected; the optimizer will propose fresh placements.");
+      }
 
-      const vendorWeight = 0.5;
-      const entryWeight = 0.3;
-      const walkwayWeight = 0.2;
+      notes.push("Loads are normalized to a one-unit-per-hour bin capacity.");
+      notes.push("Capture metrics are reported in bin-hours (one unit equals one full bin per hour).");
+      notes.push("Bins below 80% utilization are nudged toward supporting overloaded bins.");
 
-      const targetUtilizationRatio = Math.min(
-        1,
-        Math.max(0, planningParams.targetUtilization / 100)
-      );
-      notes.push(
-        `Target utilization set to ${Math.round(targetUtilizationRatio * 100)}%.`
-      );
+      const samples: WalkwaySample[] = [];
 
-      const candidateBins = bins
-        .map((bin) => {
-          const averageDistanceToVendors = computeAverageDistanceToVendors(bin, vendors);
-          const nearestEntryDistance = computeNearestEntryDistance(bin, entries);
-          const walkwayDistance = computeClosestWalkwayDistance(bin, paths);
+      const addSample = (sample: WalkwaySample) => {
+        samples.push(sample);
+      };
 
-          const vendorScore = vendors.length === 0 ? 0 : 1 / (1 + averageDistanceToVendors);
-          const entryScore =
-            entries.length === 0 || !Number.isFinite(nearestEntryDistance)
-              ? 0
-              : 1 / (1 + nearestEntryDistance);
-          const walkwayScore =
-            paths.length === 0 || !Number.isFinite(walkwayDistance)
-              ? 0
-              : 1 / (1 + walkwayDistance);
+      paths.forEach((path) => {
+        if (path.points.length < 2) return;
+        let cumulative = 0;
+        for (let i = 0; i < path.points.length - 1; i++) {
+          const start = path.points[i];
+          const end = path.points[i + 1];
+          const segmentLength = distance(start, end);
+          if (segmentLength === 0) continue;
+          const segmentSteps = Math.max(1, Math.round(segmentLength / WALKWAY_SAMPLE_SPACING));
+          for (let step = 0; step < segmentSteps; step++) {
+            const t = (step + 0.5) / segmentSteps;
+            addSample({
+              pathId: path.id,
+              point: {
+                x: start.x + (end.x - start.x) * t,
+                y: start.y + (end.y - start.y) * t,
+              },
+              distanceAlong: cumulative + segmentLength * t,
+              weight: 0,
+              wasteUnits: 0,
+            });
+          }
+          cumulative += segmentLength;
+        }
+      });
 
-          const compositeScore =
-            vendorWeight * vendorScore + entryWeight * entryScore + walkwayWeight * walkwayScore;
+      if (samples.length === 0 && vendors.length > 0) {
+        vendors.forEach((vendor) => {
+          addSample({
+            pathId: null,
+            point: { x: vendor.x, y: vendor.y },
+            distanceAlong: 0,
+            weight: 0,
+            wasteUnits: 0,
+          });
+        });
+        notes.push("Using vendor positions as provisional sampling points until walkways are drawn.");
+      }
 
-          const coverageScore = compositeScore * planningParams.binCapacity;
+      samples.forEach((sample) => {
+        let weight = 0;
+        vendors.forEach((vendor) => {
+          const dist = distance(sample.point, vendor);
+          if (dist <= VENDOR_INFLUENCE_RADIUS) {
+            weight += Math.max(0, 1 - dist / VENDOR_INFLUENCE_RADIUS);
+          }
+        });
+        sample.weight = weight;
+      });
 
-          return {
-            bin,
-            averageDistanceToVendors,
-            nearestEntryDistance,
-            walkwayDistance,
-            coverageScore,
-          };
-        })
-        .sort((a, b) => b.coverageScore - a.coverageScore);
+      let totalWeight = samples.reduce((sum, sample) => sum + sample.weight, 0);
+
+      if (totalWeight === 0 && vendors.length > 0 && samples.length > 0) {
+        vendors.forEach((vendor) => {
+          let bestIndex = -1;
+          let bestDistance = Infinity;
+          samples.forEach((sample, idx) => {
+            const dist = distance(sample.point, vendor);
+            if (dist < bestDistance) {
+              bestDistance = dist;
+              bestIndex = idx;
+            }
+          });
+          if (bestIndex !== -1) {
+            samples[bestIndex].weight += 1;
+          }
+        });
+        totalWeight = samples.reduce((sum, sample) => sum + sample.weight, 0);
+      }
+
+      if (totalWeight === 0 && samples.length > 0) {
+        totalWeight = samples.length;
+        samples.forEach((sample) => {
+          sample.weight = 1;
+        });
+      }
+
+      samples.forEach((sample) => {
+        sample.wasteUnits =
+          totalWeight === 0 ? 0 : (sample.weight / totalWeight) * totalWasteUnits;
+      });
+
+      if (samples.length === 0) {
+        notes.push("No sampling points available; add walkways and vendors to evaluate bin placement.");
+      }
 
       const capacityDrivenBins =
-        totalWastePerHour === 0
-          ? 0
-          : Math.max(1, Math.ceil(totalWastePerHour / planningParams.binCapacity));
+        totalWasteUnits <= 0 ? 0 : Math.ceil(totalWasteUnits / BIN_CAPACITY_UNITS);
 
-      if (candidateBins.length < planningParams.maxBins && bins.length > 0) {
-        notes.push(
-          "Add more bin candidates on the map if you want to deploy the full bin budget."
-        );
+      let plannedBinCount = 0;
+      if (totalWasteUnits > 0 && samples.length > 0) {
+        const requiredBins = Math.ceil(totalWasteUnits / BIN_CAPACITY_UNITS);
+        const utilLimitedBins = Math.floor(totalWasteUnits / MIN_NEW_BIN_UTILIZATION);
+        plannedBinCount = Math.min(planningParams.maxBins, requiredBins);
+        if (utilLimitedBins > 0) {
+          plannedBinCount = Math.min(plannedBinCount, utilLimitedBins);
+        } else if (totalWasteUnits < MIN_NEW_BIN_UTILIZATION) {
+          plannedBinCount = 0;
+          notes.push("Projected waste is below 50% of a bin; deployment skipped per utilization rule.");
+        }
+        plannedBinCount = Math.min(plannedBinCount, samples.length);
       }
 
-      const allocateWaste = (selectedList: typeof candidateBins) => {
-        if (selectedList.length === 0) {
-          return { captures: [] as number[], totalCaptured: 0 };
-        }
-        const capacity = planningParams.binCapacity;
-        const scores = selectedList.map((item) => Math.max(item.coverageScore, 0.0001));
-        const scoreSum = scores.reduce((sum, score) => sum + score, 0) || 1;
-        const captures = selectedList.map((item, idx) => {
-          const share = (scores[idx] / scoreSum) * totalWastePerHour;
-          return Math.min(share, capacity);
-        });
-        let totalCaptured = captures.reduce((sum, value) => sum + value, 0);
-        let remainingWaste = Math.max(0, totalWastePerHour - totalCaptured);
-        if (remainingWaste > 0) {
-          for (let i = 0; i < captures.length && remainingWaste > 0; i++) {
-            const spare = capacity - captures[i];
-            if (spare <= 0) continue;
-            const added = Math.min(spare, remainingWaste);
-            captures[i] += added;
-            remainingWaste -= added;
-          }
-          totalCaptured = captures.reduce((sum, value) => sum + value, 0);
-        }
-        return { captures, totalCaptured };
-      };
+      const selectedIndices: number[] = [];
+      const sampleIndices = samples.map((_, idx) => idx);
 
-      const computeSelectionMetrics = (indices: number[]) => {
+      if (plannedBinCount > 0 && samples.length > 0) {
+        const byDemand = [...sampleIndices].sort(
+          (a, b) => samples[b].wasteUnits - samples[a].wasteUnits
+        );
+        if (byDemand.length > 0) {
+          selectedIndices.push(byDemand[0]);
+        }
+        while (selectedIndices.length < plannedBinCount) {
+          let bestCandidate: number | null = null;
+          let bestScore = -Infinity;
+          for (const idx of sampleIndices) {
+            if (selectedIndices.includes(idx)) continue;
+            const sample = samples[idx];
+            const spacingScore = selectedIndices.reduce((minDist, selectedIdx) => {
+              const dist = distance(sample.point, samples[selectedIdx].point);
+              return dist < minDist ? dist : minDist;
+            }, Number.POSITIVE_INFINITY);
+            const weightRatio = totalWasteUnits === 0 ? 0 : sample.wasteUnits / totalWasteUnits;
+            const score =
+              (Number.isFinite(spacingScore) ? spacingScore : 0) + weightRatio * WEIGHT_DISTANCE_FACTOR;
+            if (score > bestScore) {
+              bestScore = score;
+              bestCandidate = idx;
+            }
+          }
+          if (bestCandidate === null) break;
+          selectedIndices.push(bestCandidate);
+        }
+      }
+
+      const assignSamplesToBins = (indices: number[]) => {
+        const assignments = new Array(samples.length).fill(-1);
+        const loads = indices.map(() => 0);
+        const grouped = indices.map(() => [] as number[]);
         if (indices.length === 0) {
-          return {
-            metrics: [] as (typeof candidateBins)[number][],
-            totalCaptured: 0,
-          };
+          return { loads, assignments, grouped };
         }
-        const selectedList = indices.map((idx) => candidateBins[idx]);
-        const allocation = allocateWaste(selectedList);
-        const metrics = selectedList.map((item, idx) => ({
-          ...item,
-          capturePerHour: allocation.captures[idx] ?? 0,
-          utilization:
-            planningParams.binCapacity === 0
-              ? 0
-              : (allocation.captures[idx] ?? 0) / planningParams.binCapacity,
-        }));
-        return {
-          metrics,
-          totalCaptured: allocation.totalCaptured,
-        };
+        samples.forEach((sample, sampleIdx) => {
+          if (sample.wasteUnits <= 0) return;
+          let closestBin = 0;
+          let closestDistance = Infinity;
+          indices.forEach((selectedIdx, binIdx) => {
+            const dist = distance(sample.point, samples[selectedIdx].point);
+            if (dist < closestDistance) {
+              closestDistance = dist;
+              closestBin = binIdx;
+            }
+          });
+          assignments[sampleIdx] = closestBin;
+          loads[closestBin] += sample.wasteUnits;
+          grouped[closestBin].push(sampleIdx);
+        });
+        return { loads, assignments, grouped };
       };
 
-      let selectedIndices = candidateBins
-        .slice(0, Math.min(candidateBins.length, planningParams.maxBins))
-        .map((_, idx) => idx);
-      let nextCandidateIndex = selectedIndices.length;
-      const removalNotes: string[] = [];
+      let assignment = assignSamplesToBins(selectedIndices);
 
-      if (selectedIndices.length === 0 && candidateBins.length > 0) {
-        selectedIndices = [0];
-        nextCandidateIndex = Math.max(nextCandidateIndex, 1);
-      }
-
-      let selectionMetrics = computeSelectionMetrics(selectedIndices);
-      let guard = 0;
-      while (selectedIndices.length > 0 && guard < candidateBins.length * 3) {
-        guard += 1;
-        selectionMetrics = computeSelectionMetrics(selectedIndices);
-        const failingIndex = selectionMetrics.metrics.findIndex(
-          (metric) => metric.utilization < targetUtilizationRatio && selectedIndices.length > 1
-        );
-
-        if (failingIndex === -1) {
-          if (
-            selectedIndices.length === 1 &&
-            selectionMetrics.metrics[0] &&
-            selectionMetrics.metrics[0].utilization < targetUtilizationRatio &&
-            nextCandidateIndex < candidateBins.length
-          ) {
-            selectedIndices[0] = nextCandidateIndex++;
-            continue;
-          }
-          break;
-        }
-
-        if (nextCandidateIndex < candidateBins.length) {
-          selectedIndices[failingIndex] = nextCandidateIndex++;
-        } else {
-          const removedMetric = selectionMetrics.metrics[failingIndex];
-          removalNotes.push(
-            `${removedMetric.bin.label} removed due to projected utilization ${Math.round(
-              removedMetric.utilization * 100
-            )}% below target (${Math.round(targetUtilizationRatio * 100)}%).`
+      let repositionAttempts = 0;
+      while (selectedIndices.length > 0 && repositionAttempts < 5) {
+        let moved = false;
+        selectedIndices.forEach((sampleIndex, binIdx) => {
+          const assignedSamples = assignment.grouped[binIdx];
+          if (!assignedSamples || assignedSamples.length === 0) return;
+          let sumX = 0;
+          let sumY = 0;
+          let sumWeight = 0;
+          assignedSamples.forEach((sampleIdx) => {
+            const sample = samples[sampleIdx];
+            sumX += sample.point.x * sample.wasteUnits;
+            sumY += sample.point.y * sample.wasteUnits;
+            sumWeight += sample.wasteUnits;
+          });
+          if (sumWeight === 0) return;
+          const centroid = { x: sumX / sumWeight, y: sumY / sumWeight };
+          let bestCandidate = sampleIndex;
+          let bestDistance = Math.hypot(
+            samples[sampleIndex].point.x - centroid.x,
+            samples[sampleIndex].point.y - centroid.y
           );
-          selectedIndices.splice(failingIndex, 1);
-          if (selectedIndices.length === 0 && candidateBins.length > 0) {
-            selectedIndices.push(0);
-            nextCandidateIndex = Math.max(nextCandidateIndex, 1);
+          assignedSamples.forEach((sampleIdx) => {
+            if (
+              selectedIndices.some(
+                (otherIdx, otherBinIdx) => otherBinIdx !== binIdx && otherIdx === sampleIdx
+              )
+            ) {
+              return;
+            }
+            const sample = samples[sampleIdx];
+            const dist = Math.hypot(sample.point.x - centroid.x, sample.point.y - centroid.y);
+            if (dist < bestDistance) {
+              bestDistance = dist;
+              bestCandidate = sampleIdx;
+            }
+          });
+          if (bestCandidate !== sampleIndex) {
+            selectedIndices[binIdx] = bestCandidate;
+            moved = true;
+          }
+        });
+        if (!moved) break;
+        assignment = assignSamplesToBins(selectedIndices);
+        repositionAttempts += 1;
+      }
+
+      let extraCapacity = Math.max(0, planningParams.maxBins - selectedIndices.length);
+      const unmatchedOverloads: number[] = [];
+
+      const tryAddPartner = (overloadedIdx: number) => {
+        if (extraCapacity <= 0) return false;
+        const overloadedSampleIdx = selectedIndices[overloadedIdx];
+        if (overloadedSampleIdx === undefined) return false;
+        const overloadedSample = samples[overloadedSampleIdx];
+        const candidates = samples
+          .map((sample, idx) => ({
+            idx,
+            waste: sample.wasteUnits,
+            dist: distance(sample.point, overloadedSample.point),
+          }))
+          .filter(
+            (candidate) =>
+              candidate.dist > 0 &&
+              candidate.dist <= MAX_PARTNER_DISTANCE &&
+              !selectedIndices.includes(candidate.idx) &&
+              candidate.waste > 0
+          )
+          .sort((a, b) => {
+            if (b.waste !== a.waste) return b.waste - a.waste;
+            return a.dist - b.dist;
+          });
+        for (const candidate of candidates) {
+          const nextSelection = [...selectedIndices, candidate.idx];
+          const nextAssignment = assignSamplesToBins(nextSelection);
+          const newBinLoad = nextAssignment.loads[nextSelection.length - 1];
+          if (newBinLoad >= MIN_NEW_BIN_UTILIZATION) {
+            selectedIndices.push(candidate.idx);
+            assignment = nextAssignment;
+            extraCapacity -= 1;
+            notes.push(
+              `Added a partner bin ${Math.round(candidate.dist)} units from overloaded bin ${overloadedIdx + 1}.`
+            );
+            return true;
+          }
+        }
+        if (candidates.length > 0) {
+          notes.push(
+            `Skipped adding a partner near bin ${overloadedIdx + 1} because projected utilization stayed under 50%.`
+          );
+        }
+        return false;
+      };
+
+      const tryRelocateUnderutilized = (overloaded: number[], underutilized: number[]) => {
+        for (const overloadedIdx of overloaded) {
+          const overloadedSampleIdx = selectedIndices[overloadedIdx];
+          if (overloadedSampleIdx === undefined) continue;
+          const overloadedSample = samples[overloadedSampleIdx];
+          const orderedUnder = [...underutilized].sort((a, b) => {
+            const aIdx = selectedIndices[a];
+            const bIdx = selectedIndices[b];
+            const aDist =
+              aIdx === undefined ? Infinity : distance(samples[aIdx].point, overloadedSample.point);
+            const bDist =
+              bIdx === undefined ? Infinity : distance(samples[bIdx].point, overloadedSample.point);
+            return aDist - bDist;
+          });
+          for (const underIdx of orderedUnder) {
+            const originalSampleIdx = selectedIndices[underIdx];
+            const candidatePositions = samples
+              .map((sample, idx) => ({
+                idx,
+                waste: sample.wasteUnits,
+                dist: distance(sample.point, overloadedSample.point),
+              }))
+              .filter(
+                (candidate) =>
+                  candidate.dist <= MAX_PARTNER_DISTANCE &&
+                  !selectedIndices.some(
+                    (selIdx, selBinIdx) => selBinIdx !== underIdx && selIdx === candidate.idx
+                  )
+              )
+              .sort((a, b) => {
+                if (b.waste !== a.waste) return b.waste - a.waste;
+                return a.dist - b.dist;
+              });
+            for (const candidate of candidatePositions) {
+              if (candidate.idx === originalSampleIdx) continue;
+              selectedIndices[underIdx] = candidate.idx;
+              const nextAssignment = assignSamplesToBins(selectedIndices);
+              const newUnderLoad = nextAssignment.loads[underIdx];
+              const newOverLoad = nextAssignment.loads[overloadedIdx];
+              if (
+                newUnderLoad >= MIN_NEW_BIN_UTILIZATION &&
+                newOverLoad <= assignment.loads[overloadedIdx]
+              ) {
+                assignment = nextAssignment;
+                notes.push(
+                  `Relocated bin ${underIdx + 1} toward overloaded bin ${overloadedIdx + 1} to balance demand.`
+                );
+                return true;
+              }
+            }
+            selectedIndices[underIdx] = originalSampleIdx;
+          }
+        }
+        return false;
+      };
+
+      if (selectedIndices.length > 0) {
+        let safety = 0;
+        while (safety < 10) {
+          safety += 1;
+          const overloadedIndices = assignment.loads
+            .map((load, idx) => (load > OVERLOAD_THRESHOLD + 1e-6 ? idx : -1))
+            .filter((idx) => idx !== -1);
+          if (overloadedIndices.length === 0) break;
+          let handled = false;
+          if (extraCapacity > 0) {
+            for (const overloadedIdx of overloadedIndices) {
+              if (tryAddPartner(overloadedIdx)) {
+                handled = true;
+                break;
+              }
+            }
+            if (handled) continue;
+          }
+          const underutilizedIndices = assignment.loads
+            .map((load, idx) => (load > 0 && load < UNDER_UTILIZATION_THRESHOLD ? idx : -1))
+            .filter((idx) => idx !== -1);
+          if (underutilizedIndices.length > 0 && tryRelocateUnderutilized(overloadedIndices, underutilizedIndices)) {
+            handled = true;
+          }
+          if (!handled) {
+            overloadedIndices.forEach((idx) => {
+              if (!unmatchedOverloads.includes(idx)) {
+                unmatchedOverloads.push(idx);
+              }
+            });
+            break;
           }
         }
       }
 
-      selectionMetrics = computeSelectionMetrics(selectedIndices);
+      const timestamp = Date.now();
+      const recommendedBins: RecommendedBin[] = selectedIndices.map((sampleIdx, binIdx) => {
+        const sample = samples[sampleIdx];
+        const loadUnits = assignment.loads[binIdx] ?? 0;
+        const capturedUnits = Math.min(loadUnits, BIN_CAPACITY_UNITS);
+        return {
+          id: `auto-bin-${timestamp}-${binIdx + 1}`,
+          label: `Bin ${binIdx + 1}`,
+          capacity: BIN_CAPACITY_UNITS,
+          averageDistanceToVendors: computeAverageDistanceToVendors(sample.point, vendors),
+          nearestEntryDistance: computeNearestEntryDistance(sample.point, entries),
+          walkwayDistance: computeClosestWalkwayDistance(sample.point, paths),
+          capturePerHour: capturedUnits,
+          utilization: loadUnits,
+          position: { x: sample.point.x, y: sample.point.y },
+          source: "auto",
+        };
+      });
 
-      if (selectionMetrics.metrics.length === 0 && candidateBins.length > 0) {
-        selectedIndices = [0];
-        selectionMetrics = computeSelectionMetrics(selectedIndices);
-      }
-
-      removalNotes.forEach((note) => notes.push(note));
-
-      const underUtilized = selectionMetrics.metrics.filter(
-        (metric) => metric.utilization < targetUtilizationRatio
-      );
-      if (underUtilized.length > 0) {
-        underUtilized.forEach((metric) =>
+      unmatchedOverloads.forEach((idx) => {
+        const overload = assignment.loads[idx] ?? 0;
+        if (overload > 1) {
           notes.push(
-            `${metric.bin.label} is projected to run at ${Math.round(
-              metric.utilization * 100
-            )}% utilization (target ${Math.round(targetUtilizationRatio * 100)}%).`
-          )
-        );
-      }
-
-      const totalCost = selectedIndices.length * planningParams.costPerBin;
-      const estimatedCapturePerHour = selectionMetrics.totalCaptured;
-      const captureRate =
-        totalWastePerHour === 0
-          ? selectedIndices.length > 0
-            ? 1
-            : 0
-          : estimatedCapturePerHour / totalWastePerHour;
-
-      const averageUtilization =
-        selectionMetrics.metrics.length === 0
-          ? 0
-          : selectionMetrics.metrics.reduce((sum, metric) => sum + metric.utilization, 0) /
-            selectionMetrics.metrics.length;
+            `Bin ${idx + 1} remains overloaded by ${Math.round((overload - 1) * 100)}% because the bin budget is exhausted.`
+          );
+        }
+      });
 
       if (capacityDrivenBins > planningParams.maxBins) {
         notes.push(
           `Current bin budget (${planningParams.maxBins}) is below the ${capacityDrivenBins} bins required to capture all projected waste.`
         );
-      }
-
-      const maxAverageDistance = selectionMetrics.metrics.reduce(
-        (max, item) => Math.max(max, item.averageDistanceToVendors),
-        0
-      );
-      if (maxAverageDistance > 200) {
+      } else if (selectedIndices.length < capacityDrivenBins) {
         notes.push(
-          "Some bins are far from vendors; consider repositioning closer to reduce walking distance."
+          `Only ${selectedIndices.length} bins meet the 50% utilization rule; ${capacityDrivenBins} bins would cover the full demand.`
         );
       }
 
-      const maxWalkwayDistance = selectionMetrics.metrics.reduce(
-        (max, item) => Math.max(max, item.walkwayDistance),
+      const totalCapturedUnits = assignment.loads.reduce(
+        (sum, load) => sum + Math.min(load, BIN_CAPACITY_UNITS),
         0
       );
-      if (paths.length > 0 && maxWalkwayDistance > 120) {
-        notes.push("Ensure recommended bins stay near walkways for easier access.");
-      }
+      const estimatedCapturePerHour = totalCapturedUnits;
+      const captureRate =
+        totalWasteUnits === 0 ? 0 : Math.min(1, estimatedCapturePerHour / totalWasteUnits);
+      const averageUtilization =
+        assignment.loads.length === 0
+          ? 0
+          : assignment.loads.reduce((sum, load) => sum + Math.min(load, 1), 0) /
+          assignment.loads.length;
+      const totalCost = recommendedBins.length * planningParams.costPerBin;
 
-      const recommendedBins: RecommendedBin[] = selectionMetrics.metrics.map(
-        ({
-          bin,
-          averageDistanceToVendors,
-          nearestEntryDistance,
-          walkwayDistance,
-          capturePerHour,
-          utilization,
-        }) => ({
+      const optimizedNodes: Node[] = [
+        ...nodes.filter((node) => node.type !== "bin"),
+        ...recommendedBins.map((bin) => ({
           id: bin.id,
+          x: bin.position.x,
+          y: bin.position.y,
+          type: "bin" as const,
           label: bin.label,
-          capacity: planningParams.binCapacity,
-          averageDistanceToVendors,
-          nearestEntryDistance,
-          walkwayDistance,
-          capturePerHour,
-          utilization,
-        })
-      );
+        })),
+      ];
 
-      if (
-        capacityDrivenBins > selectionMetrics.metrics.length &&
-        candidateBins.length > selectionMetrics.metrics.length
-      ) {
-        notes.push(
-          `Only ${selectionMetrics.metrics.length} bins meet the utilization target; add more candidates or adjust capacity to reach the projected need of ${capacityDrivenBins}.`
-        );
-      }
-
-      if (totalWastePerHour > 0) {
-        const capturePercent = Math.round(captureRate * 100);
-        if (capturePercent < 100) {
-          notes.push(`Projected capture covers ${capturePercent}% of hourly waste.`);
-        }
-      }
+      setNodes(optimizedNodes);
+      saveToHistory(optimizedNodes, paths);
 
       const result: OptimizationReport = {
         totalVendors: vendors.length,
         totalEntries: entries.length,
-        totalBinsAvailable: bins.length,
-        binsNeeded: selectionMetrics.metrics.length,
+        totalBinsAvailable: existingBins.length,
+        binsNeeded: recommendedBins.length,
         maxBinsAllowed: planningParams.maxBins,
         capacityDrivenBins,
-        totalWastePerHour,
+        totalWastePerHour: totalWasteUnits,
         estimatedCapturePerHour,
         captureRate,
         totalCost,
         walkwayLength,
         averageUtilization,
-        targetUtilization: targetUtilizationRatio,
+        targetUtilization: UNDER_UTILIZATION_THRESHOLD,
         recommendedBins,
         notes,
       };
@@ -689,125 +893,118 @@ export const MapEditor = () => {
     const normalized = question.toLowerCase();
     const capturePercent = Math.round(result.captureRate * 100);
     const totalCost = `$${result.totalCost.toFixed(2)}`;
-    const targetPercent = Math.round(result.targetUtilization * 100);
-    const averageDistance =
+    const averageUtilPercent = Math.round(result.averageUtilization * 100);
+    const overloadedBins = result.recommendedBins.filter((bin) => bin.utilization > 1);
+    const underutilizedBins = result.recommendedBins.filter(
+      (bin) => bin.utilization > 0 && bin.utilization < UNDER_UTILIZATION_THRESHOLD
+    );
+    const finiteEntryDistances = result.recommendedBins
+      .map((bin) => bin.nearestEntryDistance)
+      .filter((value) => Number.isFinite(value)) as number[];
+    const averageVendorDistance =
       result.recommendedBins.length === 0
         ? 0
         : result.recommendedBins.reduce((sum, bin) => sum + bin.averageDistanceToVendors, 0) /
-          result.recommendedBins.length;
-    const distanceDescriptor = `${Math.round(averageDistance)} px average walking distance`;
-    const averageWalkwayDistance =
-      result.recommendedBins.length === 0
-        ? 0
-        : result.recommendedBins.reduce((sum, bin) => sum + bin.walkwayDistance, 0) /
-          result.recommendedBins.length;
+        result.recommendedBins.length;
     const averageEntryDistance =
-      result.recommendedBins.length === 0
-        ? 0
-        : result.recommendedBins.reduce((sum, bin) => sum + bin.nearestEntryDistance, 0) /
-          result.recommendedBins.length;
-    const walkwayDistanceDescriptor = Number.isFinite(averageWalkwayDistance)
-      ? `${Math.round(averageWalkwayDistance)} px`
-      : null;
-    const entryDistanceDescriptor = Number.isFinite(averageEntryDistance)
-      ? `${Math.round(averageEntryDistance)} px`
-      : null;
-    const averageUtilPercent = Math.round(result.averageUtilization * 100);
+      finiteEntryDistances.length === 0
+        ? null
+        : finiteEntryDistances.reduce((sum, value) => sum + value, 0) / finiteEntryDistances.length;
+    const entryWalkSentence =
+      averageEntryDistance === null ? "" : `, and entries are about ${Math.round(averageEntryDistance)}px away`;
 
     const responses: string[] = [];
 
     if (normalized.includes("capture") || normalized.includes("waste")) {
       responses.push(
-        `The projected capture rate is about ${capturePercent}% (${result.estimatedCapturePerHour.toFixed(
+        `The layout captures about ${capturePercent}% of hourly waste (${result.estimatedCapturePerHour.toFixed(
           2
-        )} units of waste each hour) based on vendor output and bin capacity.`
+        )} units) while keeping every bin within the one-unit capacity ceiling.`
       );
     }
 
     if (normalized.includes("cost") || normalized.includes("budget")) {
       responses.push(
-        `Deploying the recommended bins would cost approximately ${totalCost} given the current cost-per-bin input.`
+        `Deploying ${result.binsNeeded} bin${result.binsNeeded === 1 ? "" : "s"} costs roughly ${totalCost}, staying within the allowance of ${result.maxBinsAllowed} bins.`
       );
     }
 
-    if (normalized.includes("why") && normalized.includes("bin")) {
+    if (
+      normalized.includes("space") ||
+      normalized.includes("distance") ||
+      normalized.includes("walk")
+    ) {
+      if (result.recommendedBins.length > 1) {
+        const nearestDistances: number[] = [];
+        result.recommendedBins.forEach((bin, idx) => {
+          let nearest = Infinity;
+          result.recommendedBins.forEach((other, otherIdx) => {
+            if (idx === otherIdx) return;
+            const dist = Math.hypot(bin.position.x - other.position.x, bin.position.y - other.position.y);
+            if (dist < nearest) {
+              nearest = dist;
+            }
+          });
+          if (nearest < Infinity) {
+            nearestDistances.push(nearest);
+          }
+        });
+        if (nearestDistances.length > 0) {
+          const avgSpacing = Math.round(
+            nearestDistances.reduce((sum, value) => sum + value, 0) / nearestDistances.length
+          );
+          responses.push(
+            `Bins are spaced with an average nearest-neighbour gap of ${avgSpacing}px along the walkway while still respecting utilization limits.`
+          );
+        }
+      } else if (result.recommendedBins.length === 1) {
+        responses.push("A single bin sits near the highest vendor demand cluster on the walkway.");
+      }
       responses.push(
-        `We prioritized bins with the highest coverage score — capacity balanced against walking distance from vendors — which helps maximize capture before exceeding the hourly budget target.`
+        `Vendors reach a bin in roughly ${Math.round(averageVendorDistance)}px on average${entryWalkSentence}.`
       );
     }
 
-    if (normalized.includes("bin") && !normalized.includes("why")) {
-      responses.push(
-        `We're deploying ${result.binsNeeded} of the ${result.maxBinsAllowed} bins available, based on how well each location serves nearby vendors and entry points.`
-      );
-    }
-
-    if (normalized.includes("distance") || normalized.includes("walk")) {
-      if (result.recommendedBins.length > 0) {
+    if (normalized.includes("overload") || normalized.includes("overflow")) {
+      if (overloadedBins.length > 0) {
         responses.push(
-          `Visitors would walk roughly ${distanceDescriptor} to reach a recommended bin, keeping collection convenient.`
+          `${overloadedBins.length} bin${overloadedBins.length === 1 ? " remains" : "s remain"} over capacity; each was paired with a backup within 50 units whenever the budget allowed.`
         );
       } else {
-        responses.push("Add bin candidates to estimate walking distance to collection points.");
+        responses.push("All bins are at or below 100% utilization after adding local support bins.");
       }
     }
 
-    if (normalized.includes("utilization") || normalized.includes("capacity")) {
-      if (result.recommendedBins.length > 0) {
+    if (normalized.includes("underutil") || normalized.includes("low util")) {
+      if (underutilizedBins.length > 0) {
         responses.push(
-          `Average utilization is about ${averageUtilPercent}% against the target of ${targetPercent}%.`
+          `Bins with utilization under 80% (${underutilizedBins.map((bin) => bin.label).join(", ")}) were moved toward the nearest overload; any position that would have fallen below 50% was discarded.`
         );
       } else {
-        responses.push("Add bin candidates to evaluate utilization against the target.");
+        responses.push("No bins are sitting below the 80% relocation threshold in this scenario.");
       }
     }
 
-    if (normalized.includes("target")) {
+    if (normalized.includes("why") || normalized.includes("how")) {
       responses.push(
-        `The current analysis enforces a minimum utilization of ${targetPercent}% before recommending a bin.`
+        "The optimizer samples the walkway, applies a vendor-weighted demand gradient, then selects well-spaced bins that satisfy the 50% utilization rule and adds partner bins within 50 units wherever overloads appear."
       );
     }
 
-    if (result.recommendedBins.length > 0 && (normalized.includes("entry") || normalized.includes("exit"))) {
-      if (entryDistanceDescriptor) {
-        responses.push(
-          `Recommended bins are positioned about ${entryDistanceDescriptor} from the nearest entry/exit, so foot traffic is intercepted where density is highest.`
-        );
-      } else {
-        responses.push("Add entry/exit points to tailor bin placement to arrival hotspots.");
-      }
-    }
-
-    if (result.recommendedBins.length > 0 && (normalized.includes("walkway") || normalized.includes("path"))) {
-      if (walkwayDistanceDescriptor) {
-        responses.push(
-          `On average bins sit ${walkwayDistanceDescriptor} from the drawn walkways, keeping collection points anchored to pedestrian routes.`
-        );
-      } else {
-        responses.push("Draw walkways to anchor bin placement along pedestrian routes.");
-      }
-    }
-
-    if (normalized.includes("improve") || normalized.includes("increase") || normalized.includes("better")) {
+    if (normalized.includes("add") && normalized.includes("bin")) {
       responses.push(
-        `To improve capture, consider either adding more bin locations near heavy vendors or increasing the capacity per bin.`
+        "Additional bins were skipped once projected utilization would fall below 50%, so the current plan represents the most cost-effective deployment."
       );
     }
 
-    if (normalized.includes("budget") || normalized.includes("max")) {
-      responses.push(
-        `The plan respects the current bin budget of ${result.maxBinsAllowed}; the full waste load would call for about ${result.capacityDrivenBins} bins at the current capacity.`
-      );
+    if (normalized.includes("note")) {
+      responses.push(`Key design notes: ${result.notes.join(" ")}`);
     }
 
     if (responses.length === 0) {
       responses.push(
-        `The plan favors ${result.recommendedBins.length} bins to capture ${capturePercent}% of projected waste while keeping total costs near ${totalCost} and targeting ${targetPercent}% utilization. Let me know if you want to explore alternative scenarios.`
+        `We landed on ${result.binsNeeded} bin${result.binsNeeded === 1 ? "" : "s"}, capturing ${capturePercent}% of hourly waste at about ${averageUtilPercent}% average utilization while enforcing 80% relocation and 50% deployment rules. Ask about spacing, overloads, or cost if you want more detail.`
       );
-    }
-
-    if (result.notes.length > 0 && normalized.includes("note")) {
-      responses.push(`Key design notes: ${result.notes.join(" ")}`);
     }
 
     return responses.join(" ");
@@ -911,17 +1108,19 @@ export const MapEditor = () => {
         </div>
 
         <Tabs defaultValue="editor" className="flex-1 flex flex-col">
-          <TabsList className="grid w-full grid-cols-2 mx-4 mt-4">
-            <TabsTrigger value="editor">Editor</TabsTrigger>
-            <TabsTrigger value="assistant">
-              <MessageSquare className="h-4 w-4 mr-2" />
-              Assistant
-            </TabsTrigger>
-          </TabsList>
+          <div className="pl-4 pr-6 mt-4">
+            <TabsList className="grid w-full grid-cols-2">
+              <TabsTrigger value="editor">Editor</TabsTrigger>
+              <TabsTrigger value="assistant">
+                <MessageSquare className="h-4 w-4 mr-2" />
+                Assistant
+              </TabsTrigger>
+            </TabsList>
+          </div>
 
           <TabsContent value="editor" className="flex-1 overflow-y-auto">
 
-            <div className="p-4 space-y-4 flex-1">
+            <div className="pl-4 pr-6 pt-4 pb-4 space-y-4 flex-1">
               <div>
                 <div className="flex gap-1 mb-2">
                   <Button
@@ -1013,6 +1212,21 @@ export const MapEditor = () => {
               </div>
 
               <Separator />
+
+              {selectedNode && (
+                <div className="pb-3">
+                  <h3 className="text-sm font-medium mb-2 text-foreground">Selected Node</h3>
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    className="w-full"
+                    onClick={deleteSelected}
+                  >
+                    <Trash2 className="mr-2 h-4 w-4" />
+                    Delete Node
+                  </Button>
+                </div>
+              )}
 
               <div>
                 <h3 className="text-sm font-medium mb-1 text-foreground flex items-center gap-2">
@@ -1119,24 +1333,6 @@ export const MapEditor = () => {
                   </div>
                 </div>
               </div>
-
-              {selectedNode && (
-                <>
-                  <Separator />
-                  <div>
-                    <h3 className="text-sm font-medium mb-2 text-foreground">Selected Node</h3>
-                    <Button
-                      variant="destructive"
-                      size="sm"
-                      className="w-full"
-                      onClick={deleteSelected}
-                    >
-                      <Trash2 className="mr-2 h-4 w-4" />
-                      Delete Node
-                    </Button>
-                  </div>
-                </>
-              )}
 
               {selectedPath && (
                 <>
@@ -1266,18 +1462,17 @@ export const MapEditor = () => {
           </TabsContent>
 
           <TabsContent value="assistant" className="flex-1 overflow-hidden">
-            <div className="p-4 h-full flex flex-col gap-4">
+            <div className="pl-4 pr-6 pt-4 pb-4 h-full flex flex-col gap-4">
               {report ? (
                 <>
                   <div className="flex-1 overflow-y-auto space-y-3 rounded border bg-card/40 p-3">
                     {chatMessages.map((message) => (
                       <div
                         key={message.id}
-                        className={`text-sm leading-relaxed ${
-                          message.role === "assistant"
-                            ? "text-foreground"
-                            : "text-foreground/80"
-                        }`}
+                        className={`text-sm leading-relaxed ${message.role === "assistant"
+                          ? "text-foreground"
+                          : "text-foreground/80"
+                          }`}
                       >
                         <span className="block text-xs font-semibold text-muted-foreground">
                           {message.role === "assistant" ? "Assistant" : "You"}
@@ -1425,6 +1620,25 @@ export const MapEditor = () => {
               </div>
             );
           })}
+
+          {autoRecommendedBins.map((bin) => (
+            <div
+              key={bin.id}
+              className="absolute -translate-x-1/2 -translate-y-1/2 pointer-events-none"
+              style={{
+                left: bin.position.x,
+                top: bin.position.y,
+              }}
+            >
+              <div className="w-3 h-3 rounded-full border border-dashed border-accent bg-accent/40 shadow" />
+              <div className="mt-1 text-[10px] text-accent-foreground bg-accent/80 px-1.5 py-0.5 rounded shadow text-center">
+                {bin.label}
+                <span className="block text-[9px] text-accent-foreground/90">
+                  {Math.round(bin.utilization * 100)}% util • {bin.capturePerHour.toFixed(1)} cap/hr
+                </span>
+              </div>
+            </div>
+          ))}
 
           {/* Draw points for current path */}
           {drawingPath.map((point, i) => (

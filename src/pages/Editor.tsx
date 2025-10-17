@@ -3,7 +3,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { MapEditor } from "@/components/MapEditor";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, Save } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 import { toast } from "sonner";
 import type { User } from "@supabase/supabase-js";
 
@@ -70,10 +70,6 @@ export default function Editor() {
             <p className="text-xs text-muted-foreground">Urban Flow Mapper</p>
           </div>
         </div>
-        <Button size="sm">
-          <Save className="mr-2 h-4 w-4" />
-          Save
-        </Button>
       </header>
       <div className="flex-1">
         <MapEditor />
