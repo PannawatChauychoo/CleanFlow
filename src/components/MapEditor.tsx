@@ -1,13 +1,17 @@
 import { useState, useRef, useEffect } from "react";
-import { MapPin, Route, Footprints, Move, Trash2, Layers, Undo, Redo, DoorOpen, Star } from "lucide-react";
+import { MapPin, Route, Footprints, Move, Trash2, Layers, Undo, Redo, DoorOpen, Star, Activity } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import mapImage from "@/assets/coliseum_grid_overlay.png";
 import { toast } from "sonner";
+import { SimulationEngine } from "@/utils/simulationEngine";
+import { SimulationCanvas } from "@/components/SimulationCanvas";
+import { SimulationControls } from "@/components/SimulationControls";
 
 type ToolType = "select" | "node" | "street" | "walkway" | "entry-exit" | "poi";
 
@@ -49,6 +53,30 @@ export const MapEditor = () => {
   // History for undo/redo
   const [history, setHistory] = useState<MapState[]>([{ nodes: [], paths: [] }]);
   const [historyIndex, setHistoryIndex] = useState(0);
+  
+  // Simulation state
+  const [simulation, setSimulation] = useState<SimulationEngine | null>(null);
+  const [isSimulating, setIsSimulating] = useState(false);
+  const [simulationAgents, setSimulationAgents] = useState<any[]>([]);
+  const [trailField, setTrailField] = useState<number[][]>([]);
+  const [statistics, setStatistics] = useState({
+    stepCount: 0,
+    totalAgents: 0,
+    avgDistanceTraveled: "0",
+    maxCongestion: 0,
+    avgCongestion: "0"
+  });
+  const [showTrails, setShowTrails] = useState(true);
+  const [showAgents, setShowAgents] = useState(true);
+  const [simParams, setSimParams] = useState({
+    numAgents: 100,
+    staticWeight: 1.0,
+    dynamicWeight: 0.5,
+    randomness: 0.2,
+    decayRate: 0.95,
+    diffusionRate: 0.1
+  });
+  const simulationInterval = useRef<number | null>(null);
   
   const canvasRef = useRef<HTMLDivElement>(null);
 
@@ -203,6 +231,77 @@ export const MapEditor = () => {
     return type === "street" ? "hsl(var(--node-street))" : "hsl(var(--node-walkway))";
   };
 
+  // Simulation functions
+  const startSimulation = () => {
+    if (nodes.filter(n => n.type === 'entry-exit').length === 0) {
+      toast.error("Add at least one entry/exit point to start simulation");
+      return;
+    }
+
+    const mapWidth = canvasRef.current?.clientWidth || 800;
+    const mapHeight = canvasRef.current?.clientHeight || 600;
+
+    const sim = new SimulationEngine(
+      {
+        gridSize: 20,
+        mapWidth,
+        mapHeight,
+        ...simParams
+      },
+      nodes
+    );
+
+    setSimulation(sim);
+    setIsSimulating(true);
+    setSimulationAgents(sim.getAgents());
+    setTrailField(sim.getDynamicField());
+    setStatistics(sim.getStatistics());
+    toast.success("Simulation started");
+
+    simulationInterval.current = window.setInterval(() => {
+      sim.step();
+      setSimulationAgents([...sim.getAgents()]);
+      setTrailField([...sim.getDynamicField()]);
+      setStatistics(sim.getStatistics());
+    }, 100);
+  };
+
+  const pauseSimulation = () => {
+    if (simulationInterval.current) {
+      clearInterval(simulationInterval.current);
+      simulationInterval.current = null;
+    }
+    setIsSimulating(false);
+    toast.info("Simulation paused");
+  };
+
+  const resetSimulation = () => {
+    if (simulationInterval.current) {
+      clearInterval(simulationInterval.current);
+      simulationInterval.current = null;
+    }
+    setIsSimulating(false);
+    setSimulation(null);
+    setSimulationAgents([]);
+    setTrailField([]);
+    setStatistics({
+      stepCount: 0,
+      totalAgents: 0,
+      avgDistanceTraveled: "0",
+      maxCongestion: 0,
+      avgCongestion: "0"
+    });
+    toast.info("Simulation reset");
+  };
+
+  useEffect(() => {
+    return () => {
+      if (simulationInterval.current) {
+        clearInterval(simulationInterval.current);
+      }
+    };
+  }, []);
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Delete" && (selectedNode || selectedPath)) {
@@ -229,11 +328,22 @@ export const MapEditor = () => {
   return (
     <div className="flex h-screen bg-background">
       {/* Sidebar */}
-      <Card className="w-64 rounded-none border-r flex flex-col overflow-y-auto">
+      <Card className="w-80 rounded-none border-r flex flex-col overflow-y-auto">
         <div className="p-4 border-b">
           <h2 className="text-lg font-semibold text-foreground">Map Editor</h2>
           <p className="text-sm text-muted-foreground">Urban planning tools</p>
         </div>
+
+        <Tabs defaultValue="editor" className="flex-1 flex flex-col">
+          <TabsList className="grid w-full grid-cols-2 mx-4 mt-4">
+            <TabsTrigger value="editor">Editor</TabsTrigger>
+            <TabsTrigger value="simulation">
+              <Activity className="h-4 w-4 mr-2" />
+              Simulation
+            </TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="editor" className="flex-1 overflow-y-auto">
 
         <div className="p-4 space-y-4 flex-1">
           <div>
@@ -457,6 +567,24 @@ export const MapEditor = () => {
             {tool === "walkway" && "Drawing Walkways"}
           </Badge>
         </div>
+          </TabsContent>
+
+          <TabsContent value="simulation" className="p-4">
+            <SimulationControls
+              isRunning={isSimulating}
+              onStart={startSimulation}
+              onPause={pauseSimulation}
+              onReset={resetSimulation}
+              statistics={statistics}
+              params={simParams}
+              onParamsChange={setSimParams}
+              showTrails={showTrails}
+              showAgents={showAgents}
+              onShowTrailsChange={setShowTrails}
+              onShowAgentsChange={setShowAgents}
+            />
+          </TabsContent>
+        </Tabs>
       </Card>
 
       {/* Canvas */}
@@ -474,6 +602,19 @@ export const MapEditor = () => {
             backgroundRepeat: "no-repeat",
           }}
         >
+          {/* Simulation overlay */}
+          {simulation && (
+            <SimulationCanvas
+              agents={simulationAgents}
+              trailField={trailField}
+              gridSize={20}
+              width={canvasRef.current?.clientWidth || 800}
+              height={canvasRef.current?.clientHeight || 600}
+              showTrails={showTrails}
+              showAgents={showAgents}
+            />
+          )}
+
           <svg className="absolute inset-0 w-full h-full pointer-events-none">
             {/* Draw paths */}
             {paths.map((path) => {
