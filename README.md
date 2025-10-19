@@ -7,7 +7,6 @@
 > **Empowering cities and event organizers to plan cleaner, smarter, and more sustainable events through AI simulation and optimization.**
 
 ---
-
 ## 🌍 Overview
 
 Every year, major cities pledge to reduce waste — yet even flagship events like the Olympics struggle to meet their **zero-waste goals** due to inefficient bin placement, unpredictable crowd movement, and limited visibility into waste behavior.
@@ -17,23 +16,17 @@ Every year, major cities pledge to reduce waste — yet even flagship events lik
 Inspired by the upcoming **Los Angeles 2028 Olympics**, this project envisions how AI can help LA become the **first zero-waste Olympic city**.
 
 ---
+## 🎥 Demo Video
 
-## 🎥 Storyboard Narrative for Higgsfield (if given credit for sketch to video)
-
-| Panel | Scene | Description |
-|-------|--------|-------------|
-| 1 | *The Promise* | The Mayor of LA promises a zero-waste Olympics. |
-| 2 | *The Reality* | Overflowing bins and missed recycling targets. |
-| 3 | *Rewind* | Time rewinds to the event planning stage. |
-| 4 | *The Discovery* | The Mayor’s team finds the CleanFlow AI app. |
-| 5 | *Optimization* | AI simulates crowd flow and suggests optimal bin placements. |
-| 6 | *The Transformation* | Streets are clean; recycling hits 100%. |
-| 7 | *The Triumph* | LA wins the **Gold Medal in Waste Management** for the Olympics. 🥇 |
-
-*(Storyboard visual available in the `/assets` folder.)*
+<div>
+    <a href="https://www.loom.com/share/200a8636453e4f4897ff3a885d6033cd">
+    </a>
+    <a href="https://www.loom.com/share/200a8636453e4f4897ff3a885d6033cd">
+      <img style="max-width:300px;" src="https://cdn.loom.com/sessions/thumbnails/200a8636453e4f4897ff3a885d6033cd-6ab63ca266ae9633-full-play.gif">
+    </a>
+  </div>
 
 ---
-
 ## 🧠 Core Features
 
 ### 🔹 Map & Heatmap Upload
