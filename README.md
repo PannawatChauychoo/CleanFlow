@@ -124,14 +124,8 @@ After clicking **Submit**, the AI:
 
 
 
-## How can I deploy this project?
+## How can I clone and run this project?
 
-Simply open [Lovable](https://lovable.dev/projects/059dce98-20a1-4c3c-b7b3-b85761a3b69d) and click on Share -> Publish.
-
-## Can I connect a custom domain to my Lovable project?
-
-Yes, you can!
-
-To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
-
-Read more here: [Setting up a custom domain](https://docs.lovable.dev/features/custom-domain#custom-domain)
+- Create a new folder
+- To clone: git clone https://github.com/PannawatChauychoo/CleanFlow.git (or git clone git@github.com:PannawatChauychoo/CleanFlow.git)
+- To run locally: npm run dev
